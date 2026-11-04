@@ -36,7 +36,6 @@ import type {
   TimeRange,
 } from './types'
 
-const envApiKey = (import.meta.env.VITE_DEEPSEEK_API_KEY as string | undefined)?.trim() ?? ''
 const apiBase = (
   (import.meta.env.VITE_DEEPSEEK_API_BASE as string | undefined) || 'https://api.deepseek.com'
 ).replace(/\/$/, '')
@@ -48,6 +47,43 @@ const FETCH_CACHE = 'sift:fetch-cache'
 const MAX_HISTORY = 6
 const SEARCH_LIMIT = 128
 const QUICK_SEARCHES = ['2026 诺贝尔物理学奖', 'DeepSeek V4 发布', 'Vue 3.5 新特性']
+
+type StorageKind = 'local' | 'session'
+
+function getStorage(kind: StorageKind): Storage | null {
+  try {
+    return kind === 'local' ? window.localStorage : window.sessionStorage
+  } catch {
+    return null
+  }
+}
+
+function readStorage(kind: StorageKind, key: string) {
+  try {
+    return getStorage(kind)?.getItem(key) ?? null
+  } catch {
+    return null
+  }
+}
+
+function writeStorage(kind: StorageKind, key: string, value: string) {
+  try {
+    const storage = getStorage(kind)
+    if (!storage) return false
+    storage.setItem(key, value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function removeStorage(kind: StorageKind, key: string) {
+  try {
+    getStorage(kind)?.removeItem(key)
+  } catch {
+    // Best-effort cleanup only; blocked storage must not affect the app.
+  }
+}
 
 const query = ref('')
 const submittedQuery = ref('')
@@ -68,7 +104,7 @@ const fetchedContent = ref('')
 const fetchedTitle = ref('')
 const toast = ref('')
 const draftKey = ref('')
-const apiKey = ref(localStorage.getItem(KEY_STORAGE) || envApiKey)
+const apiKey = ref(readStorage('local', KEY_STORAGE) || '')
 const history = ref<Array<{ query: string; at: number }>>(readHistory())
 
 const filters = reactive<SearchFilters>({
@@ -143,7 +179,7 @@ const languageOptions: Array<{ value: Language; label: string }> = [
 
 function readHistory(): Array<{ query: string; at: number }> {
   try {
-    const value = JSON.parse(localStorage.getItem(HISTORY_STORAGE) || '[]')
+    const value = JSON.parse(readStorage('local', HISTORY_STORAGE) || '[]')
     return Array.isArray(value) ? value.slice(0, MAX_HISTORY) : []
   } catch {
     return []
@@ -210,13 +246,17 @@ function shortHash(value: string) {
   return (hash >>> 0).toString(36)
 }
 
+function searchCacheSignature(apiQuery: string) {
+  return JSON.stringify([apiQuery, filters.count, filters.needContent])
+}
+
 function readCache(apiQuery: string) {
   try {
-    const cache = JSON.parse(sessionStorage.getItem(SESSION_CACHE) || '{}') as Record<
+    const cache = JSON.parse(readStorage('session', SESSION_CACHE) || '{}') as Record<
       string,
       { results: SearchResult[]; at: number }
     >
-    return cache[shortHash(apiQuery)] || null
+    return cache[shortHash(searchCacheSignature(apiQuery))] || null
   } catch {
     return null
   }
@@ -225,14 +265,14 @@ function readCache(apiQuery: string) {
 function writeCache(apiQuery: string, value: SearchResult[]) {
   if (filters.needContent) return
   try {
-    const cache = JSON.parse(sessionStorage.getItem(SESSION_CACHE) || '{}') as Record<
+    const cache = JSON.parse(readStorage('session', SESSION_CACHE) || '{}') as Record<
       string,
       { results: SearchResult[]; at: number }
     >
     const entries = Object.entries(cache).sort(([, a], [, b]) => b.at - a.at).slice(0, 4)
     const trimmed = Object.fromEntries(entries)
-    trimmed[shortHash(apiQuery)] = { results: value, at: Date.now() }
-    sessionStorage.setItem(SESSION_CACHE, JSON.stringify(trimmed))
+    trimmed[shortHash(searchCacheSignature(apiQuery))] = { results: value, at: Date.now() }
+    writeStorage('session', SESSION_CACHE, JSON.stringify(trimmed))
   } catch {
     // A full or unavailable session store should never block a search.
   }
@@ -240,7 +280,7 @@ function writeCache(apiQuery: string, value: SearchResult[]) {
 
 function readFetchCache(url: string) {
   try {
-    const cache = JSON.parse(sessionStorage.getItem(FETCH_CACHE) || '{}') as Record<
+    const cache = JSON.parse(readStorage('session', FETCH_CACHE) || '{}') as Record<
       string,
       { title: string; content: string; at: number }
     >
@@ -252,14 +292,14 @@ function readFetchCache(url: string) {
 
 function writeFetchCache(url: string, title: string, content: string) {
   try {
-    const cache = JSON.parse(sessionStorage.getItem(FETCH_CACHE) || '{}') as Record<
+    const cache = JSON.parse(readStorage('session', FETCH_CACHE) || '{}') as Record<
       string,
       { title: string; content: string; at: number }
     >
     const entries = Object.entries(cache).sort(([, a], [, b]) => b.at - a.at).slice(0, 2)
     const trimmed = Object.fromEntries(entries)
     trimmed[shortHash(url)] = { title, content, at: Date.now() }
-    sessionStorage.setItem(FETCH_CACHE, JSON.stringify(trimmed))
+    writeStorage('session', FETCH_CACHE, JSON.stringify(trimmed))
   } catch {
     // Fetching should still work if browser storage is full or unavailable.
   }
@@ -271,7 +311,7 @@ function saveHistory(term: string) {
     ...history.value.filter((item) => item.query !== term),
   ].slice(0, MAX_HISTORY)
   history.value = next
-  localStorage.setItem(HISTORY_STORAGE, JSON.stringify(next))
+  writeStorage('local', HISTORY_STORAGE, JSON.stringify(next))
 }
 
 function updateUrl(term: string) {
@@ -505,21 +545,22 @@ function openSettings() {
 function saveKey() {
   const next = draftKey.value.trim()
   apiKey.value = next
-  if (next) localStorage.setItem(KEY_STORAGE, next)
-  else localStorage.removeItem(KEY_STORAGE)
   settingsOpen.value = false
-  showToast(next ? 'API Key 已保存在当前浏览器' : 'API Key 已清除')
+  if (!next) {
+    removeStorage('local', KEY_STORAGE)
+    showToast('API Key 已清除')
+    return
+  }
+
+  const saved = writeStorage('local', KEY_STORAGE, next)
+  showToast(saved ? 'API Key 已保存在当前浏览器' : 'Key 仅本次页面有效：浏览器存储不可用')
 }
 
 function clearLocalKey() {
   draftKey.value = ''
-  apiKey.value = envApiKey
-  localStorage.removeItem(KEY_STORAGE)
-  if (envApiKey) {
-    showToast('已恢复内置测试 Key')
-  } else {
-    showToast('已清除本地 API Key')
-  }
+  apiKey.value = ''
+  removeStorage('local', KEY_STORAGE)
+  showToast('已清除本地 API Key')
 }
 
 function resetFilters() {
@@ -1022,8 +1063,8 @@ onBeforeUnmount(() => {
             <div class="notice">
               <ShieldCheck :size="18" />
               <p>
-                <strong>公开部署前请移除默认 Key。</strong>
-                纯前端无法隐藏密钥；正式产品建议增加自有后端代理。
+                <strong>Key 只在运行时输入，不会写入构建产物。</strong>
+                纯前端仍无法对访问者隐藏密钥；正式产品建议增加自有后端代理。
               </p>
             </div>
 

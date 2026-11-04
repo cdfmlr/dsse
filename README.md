@@ -9,14 +9,8 @@ pnpm install
 pnpm dev
 ```
 
-测试 Key 放在不会提交到 Git 的 `.env.local`：
-
-```dotenv
-VITE_DEEPSEEK_API_KEY=sk-...
-VITE_DEEPSEEK_API_BASE=https://api.deepseek.com
-```
-
-也可以在页面的 Key 设置中填写，Key 会保存在当前浏览器的 `localStorage`。
+启动后在页面的 Key 设置中填写 DeepSeek API Key。应用不会从
+`VITE_DEEPSEEK_API_KEY` 读取或预埋 Key；浏览器存储不可用时，Key 仍可在当前页面会话中使用。
 
 ## 功能
 
@@ -33,5 +27,7 @@ pnpm build
 pnpm preview
 ```
 
-这是纯前端实现，使用环境变量传入的 Key 会被写入构建产物。公开部署前请移除默认 Key，
-或增加一个自有后端代理；否则任何访问者都可能拿到并使用该 Key。
+生产构建会拒绝 `VITE_DEEPSEEK_API_KEY`，避免密钥被内联进公开 JS。
+
+纯前端模式仍意味着用户输入的 Key 会直接发送到 DeepSeek。面向不特定用户公开部署时，
+建议增加自有后端代理，不要向访问者分发可复用的 API Key。
