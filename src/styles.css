@@ -247,23 +247,46 @@ select:focus-visible {
   transition: background 160ms ease;
 }
 
-.locale-button {
+.locale-picker {
+  position: relative;
   display: flex;
   height: 38px;
-  padding: 0 12px;
+  padding: 0 25px 0 11px;
   align-items: center;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: transparent;
-  cursor: pointer;
-  font-family: var(--mono);
-  font-size: 9px;
   gap: 6px;
   transition: background 160ms ease;
 }
 
-.locale-button:hover {
+.locale-picker:hover {
   background: rgba(255, 255, 255, 0.45);
+}
+
+.locale-picker__chevron {
+  position: absolute;
+  right: 10px;
+  color: var(--ink-faint);
+  pointer-events: none;
+}
+
+.locale-picker svg {
+  flex: none;
+  color: var(--ink-soft);
+}
+
+.locale-picker select {
+  max-width: 92px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  appearance: none;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 9px;
 }
 
 .key-button:hover {

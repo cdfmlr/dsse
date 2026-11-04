@@ -17,6 +17,7 @@ export default {
   locale: {
     switchToEnglish: 'Switch to English',
     switchToChinese: '切换到中文',
+    selectorLabel: 'Interface language',
   },
   account: {
     connected: 'Connected',

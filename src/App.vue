@@ -6,6 +6,7 @@ import {
   ArrowUpRight,
   BookOpenText,
   Check,
+  ChevronDown,
   CircleAlert,
   Clock3,
   Copy,
@@ -27,7 +28,7 @@ import {
 } from 'lucide-vue-next'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { LOCALE_STORAGE_KEY, type AppLocale } from './i18n'
+import { LOCALE_OPTIONS, LOCALE_STORAGE_KEY, type AppLocale } from './i18n'
 import type {
   ApiErrorShape,
   FetchResponse,
@@ -154,11 +155,12 @@ const keyLabel = computed(() => t(apiKey.value ? 'account.connected' : 'account.
 const connectionLabel = computed(() =>
   t(apiKey.value ? 'account.ready' : 'account.connectToStart'),
 )
-const isEnglish = computed(() => locale.value === 'en-US')
-const localeToggleLabel = computed(() => (isEnglish.value ? '中文' : 'EN'))
-const localeAriaLabel = computed(() =>
-  t(isEnglish.value ? 'locale.switchToChinese' : 'locale.switchToEnglish'),
-)
+const selectedLocale = computed<AppLocale>({
+  get: () => locale.value as AppLocale,
+  set: (value) => {
+    locale.value = value
+  },
+})
 const quickSearches = computed(() => QUICK_SEARCH_KEYS.map((key) => t(key)))
 const resultHeading = computed(() => {
   if (status.value === 'loading') return t('results.heading.loading')
@@ -202,11 +204,6 @@ const languageOptions = computed<Array<{ value: Language; label: string }>>(() =
   { value: 'zh', label: t('filters.language.zh') },
   { value: 'en', label: t('filters.language.en') },
 ])
-
-function toggleLocale() {
-  const next: AppLocale = isEnglish.value ? 'zh-CN' : 'en-US'
-  locale.value = next
-}
 
 watch(
   locale,
@@ -854,15 +851,15 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="topbar__actions">
-        <button
-          class="locale-button"
-          type="button"
-          :aria-label="localeAriaLabel"
-          @click="toggleLocale"
-        >
+        <label class="locale-picker">
           <Languages :size="15" />
-          <span>{{ localeToggleLabel }}</span>
-        </button>
+          <select v-model="selectedLocale" :aria-label="t('locale.selectorLabel')">
+            <option v-for="option in LOCALE_OPTIONS" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+          <ChevronDown class="locale-picker__chevron" :size="12" aria-hidden="true" />
+        </label>
         <button class="icon-button" type="button" :aria-label="t('app.viewGuide')" @click="openGuide">
           <BookOpenText :size="18" />
         </button>
