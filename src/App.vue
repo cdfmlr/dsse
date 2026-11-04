@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   ArrowDownUp,
   ArrowUpRight,
@@ -12,6 +13,7 @@ import {
   Globe2,
   History,
   KeyRound,
+  Languages,
   LoaderCircle,
   PanelRightOpen,
   RotateCcw,
@@ -25,6 +27,7 @@ import {
 } from 'lucide-vue-next'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { LOCALE_STORAGE_KEY, type AppLocale } from './i18n'
 import type {
   ApiErrorShape,
   FetchResponse,
@@ -46,7 +49,13 @@ const SESSION_CACHE = 'sift:search-cache'
 const FETCH_CACHE = 'sift:fetch-cache'
 const MAX_HISTORY = 6
 const SEARCH_LIMIT = 128
-const QUICK_SEARCHES = ['2026 诺贝尔物理学奖', 'DeepSeek V4 发布', 'Vue 3.5 新特性']
+const QUICK_SEARCH_KEYS = [
+  'quickSearches.physics',
+  'quickSearches.deepseekRelease',
+  'quickSearches.vueFeatures',
+] as const
+
+const { t, locale } = useI18n()
 
 type StorageKind = 'local' | 'session'
 
@@ -141,13 +150,24 @@ const activeFilterCount = computed(
     Number(filters.site.trim().length > 0) +
     Number(filters.needContent),
 )
-const keyLabel = computed(() => (apiKey.value ? '账户已连接' : '连接账户'))
-const connectionLabel = computed(() => (apiKey.value ? '准备就绪' : '连接后开始'))
+const keyLabel = computed(() => t(apiKey.value ? 'account.connected' : 'account.connect'))
+const connectionLabel = computed(() =>
+  t(apiKey.value ? 'account.ready' : 'account.connectToStart'),
+)
+const isEnglish = computed(() => locale.value === 'en-US')
+const localeToggleLabel = computed(() => (isEnglish.value ? '中文' : 'EN'))
+const localeAriaLabel = computed(() =>
+  t(isEnglish.value ? 'locale.switchToChinese' : 'locale.switchToEnglish'),
+)
+const quickSearches = computed(() => QUICK_SEARCH_KEYS.map((key) => t(key)))
 const resultHeading = computed(() => {
-  if (status.value === 'loading') return '正在穿过网页，寻找相关线索'
-  if (status.value === 'error') return '这次没有找到答案'
-  if (!results.value.length) return '没有找到匹配的网页'
-  return `为「${submittedQuery.value}」找到 ${results.value.length} 条结果`
+  if (status.value === 'loading') return t('results.heading.loading')
+  if (status.value === 'error') return t('results.heading.error')
+  if (!results.value.length) return t('results.heading.empty')
+  return t('results.heading.count', {
+    query: submittedQuery.value,
+    count: results.value.length,
+  })
 })
 const renderedContent = computed(() => {
   const page = selectedResult.value
@@ -157,7 +177,7 @@ const renderedContent = computed(() => {
     page.content ||
     page.summary ||
     page.snippet ||
-    '该网页没有提供可预览的摘要。'
+    t('drawer.noPreview')
   const html = marked.parse(raw, { async: false })
   return DOMPurify.sanitize(String(html))
 })
@@ -165,23 +185,45 @@ const hasFullContent = computed(
   () => Boolean(fetchedContent.value || selectedResult.value?.content),
 )
 const contentSource = computed(() => {
-  if (fetchedContent.value || selectedResult.value?.content) return '完整正文'
-  return '网页摘要'
+  if (fetchedContent.value || selectedResult.value?.content) return t('drawer.fullContent')
+  return t('drawer.summary')
 })
 
-const timeOptions: Array<{ value: TimeRange; label: string }> = [
-  { value: 'any', label: '不限时间' },
-  { value: 'day', label: '最近 24 小时' },
-  { value: 'week', label: '最近一周' },
-  { value: 'month', label: '最近一月' },
-  { value: 'year', label: '最近一年' },
-]
+const timeOptions = computed<Array<{ value: TimeRange; label: string }>>(() => [
+  { value: 'any', label: t('filters.time.any') },
+  { value: 'day', label: t('filters.time.day') },
+  { value: 'week', label: t('filters.time.week') },
+  { value: 'month', label: t('filters.time.month') },
+  { value: 'year', label: t('filters.time.year') },
+])
 
-const languageOptions: Array<{ value: Language; label: string }> = [
-  { value: 'auto', label: '自动' },
-  { value: 'zh', label: '中文' },
-  { value: 'en', label: 'English' },
-]
+const languageOptions = computed<Array<{ value: Language; label: string }>>(() => [
+  { value: 'auto', label: t('filters.language.auto') },
+  { value: 'zh', label: t('filters.language.zh') },
+  { value: 'en', label: t('filters.language.en') },
+])
+
+function toggleLocale() {
+  const next: AppLocale = isEnglish.value ? 'zh-CN' : 'en-US'
+  locale.value = next
+}
+
+watch(
+  locale,
+  (value) => {
+    document.documentElement.lang = value
+    document.title = t('meta.title')
+    document
+      .querySelector('meta[name="description"]')
+      ?.setAttribute('content', t('meta.description'))
+    try {
+      window.localStorage.setItem(LOCALE_STORAGE_KEY, value)
+    } catch {
+      // Locale persistence is best-effort; switching still works for this visit.
+    }
+  },
+  { immediate: true },
+)
 
 function readHistory(): Array<{ query: string; at: number }> {
   try {
@@ -423,10 +465,12 @@ function updateUrl(term: string, options: SearchFilters) {
 
 function restoreFiltersFromUrl(url: URL) {
   const time = url.searchParams.get('time')
-  if (timeOptions.some((option) => option.value === time)) filters.time = time as TimeRange
+  if (timeOptions.value.some((option) => option.value === time)) {
+    filters.time = time as TimeRange
+  }
 
   const language = url.searchParams.get('lang')
-  if (languageOptions.some((option) => option.value === language)) {
+  if (languageOptions.value.some((option) => option.value === language)) {
     filters.language = language as Language
   }
 
@@ -468,7 +512,7 @@ async function fetchResultContent() {
   if (!page || fetchStatus.value === 'loading') return
   if (!apiKey.value) {
     openSettings()
-    showToast('请先配置 DeepSeek API Key')
+    showToast(t('toasts.configureKey'))
     return
   }
 
@@ -477,7 +521,7 @@ async function fetchResultContent() {
     fetchedTitle.value = cached.title
     fetchedContent.value = cached.content
     fetchStatus.value = 'success'
-    showToast('已载入刚才读取的正文')
+    showToast(t('toasts.cachedContent'))
     return
   }
 
@@ -501,25 +545,25 @@ async function fetchResultContent() {
       ApiErrorShape
     if (!response.ok) {
       const friendly: Record<number, string> = {
-        400: '这条网页暂时无法读取。',
-        401: 'API Key 无效或已失效，请重新连接账户。',
-        402: '账户余额不足，请前往 DeepSeek 开放平台充值。',
-        403: '该网页不允许读取正文。',
-        404: '没有从这条网页中找到可阅读的正文。',
-        408: '读取时间有点久，请稍后再试。',
-        413: '这条网页的正文太长，暂时无法完整读取。',
-        429: '读取得有点频繁，请稍等片刻。',
-        500: 'DeepSeek 暂时无法读取这条正文。',
-        504: '读取响应超时，请稍后再试。',
+        400: t('errors.fetch.400'),
+        401: t('errors.fetch.401'),
+        402: t('errors.fetch.402'),
+        403: t('errors.fetch.403'),
+        404: t('errors.fetch.404'),
+        408: t('errors.fetch.408'),
+        413: t('errors.fetch.413'),
+        429: t('errors.fetch.429'),
+        500: t('errors.fetch.500'),
+        504: t('errors.fetch.504'),
       }
       throw new Error(
         friendly[response.status] ||
-          `暂时无法读取这条正文，请稍后再试（HTTP ${response.status}）`,
+          t('errors.fetch.unknown', { status: response.status }),
       )
     }
 
     if (typeof payload.content !== 'string' || !payload.content.trim()) {
-      throw new Error('该网页没有返回可阅读的正文。')
+      throw new Error(t('errors.fetch.emptyContent'))
     }
     if (selectedResult.value?.url !== page.url) return
 
@@ -527,15 +571,15 @@ async function fetchResultContent() {
     fetchedContent.value = payload.content
     fetchStatus.value = 'success'
     writeFetchCache(page.url, fetchedTitle.value, payload.content)
-    showToast('正文已准备好')
+    showToast(t('toasts.contentReady'))
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     fetchError.value =
       error instanceof TypeError
-        ? '无法读取网页正文，请检查网络后重试。'
+        ? t('errors.fetch.network')
         : error instanceof Error
           ? error.message
-          : '暂时无法读取网页正文。'
+          : t('errors.fetch.fallback')
     fetchStatus.value = 'error'
   }
 }
@@ -548,14 +592,14 @@ async function runSearch(term: string) {
   }
   if (!apiKey.value) {
     openSettings()
-    showToast('请先配置 DeepSeek API Key')
+    showToast(t('toasts.configureKey'))
     return
   }
 
   const requestFilters = snapshotFilters()
   const apiQuery = buildApiQuery(clean, requestFilters)
   if (apiQuery.length > SEARCH_LIMIT) {
-    errorMessage.value = `搜索内容有点长，请控制在 ${SEARCH_LIMIT} 个字符以内（含筛选条件）。`
+    errorMessage.value = t('errors.queryTooLong', { limit: SEARCH_LIMIT })
     status.value = 'error'
     submittedQuery.value = clean
     return
@@ -604,23 +648,21 @@ async function runSearch(term: string) {
     const payload = (await response.json().catch(() => ({}))) as SearchResponse & ApiErrorShape
     if (!response.ok) {
       const friendly: Record<number, string> = {
-        400: '搜索条件有些问题，请调整后再试。',
-        401: 'API Key 无效或已失效，请重新连接账户。',
-        402: '账户余额不足，请前往 DeepSeek 开放平台充值。',
-        403: '这次搜索没有被允许，请调整关键词后再试。',
-        408: '搜索时间有点久，请稍后再试。',
-        413: '搜索内容过长，请精简后再试。',
-        429: '搜索得有点快，请稍等片刻。',
-        500: 'DeepSeek 搜索暂时不可用。',
-        504: '搜索响应超时，请稍后再试。',
+        400: t('errors.search.400'),
+        401: t('errors.search.401'),
+        402: t('errors.search.402'),
+        403: t('errors.search.403'),
+        408: t('errors.search.408'),
+        413: t('errors.search.413'),
+        429: t('errors.search.429'),
+        500: t('errors.search.500'),
+        504: t('errors.search.504'),
       }
-      throw new Error(
-        friendly[response.status] || '暂时无法完成搜索，请稍后再试。',
-      )
+      throw new Error(friendly[response.status] || t('errors.search.unknown'))
     }
 
     if (!Array.isArray(payload.results)) {
-      throw new Error('搜索结果暂时无法显示，请稍后再试。')
+      throw new Error(t('errors.search.invalidResponse'))
     }
 
     results.value = payload.results
@@ -631,10 +673,10 @@ async function runSearch(term: string) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     errorMessage.value =
       error instanceof TypeError
-        ? '无法连接搜索服务，请检查网络后重试。'
+        ? t('errors.search.network')
         : error instanceof Error
           ? error.message
-          : '搜索暂时无法完成，请稍后再试。'
+          : t('errors.search.fallback')
     status.value = 'error'
   }
 }
@@ -679,23 +721,19 @@ function saveKey() {
   closeSettings()
   if (!next) {
     removeStorage('local', KEY_STORAGE)
-    showToast('API Key 已从当前浏览器移除')
+    showToast(t('toasts.keyRemoved'))
     return
   }
 
   const saved = writeStorage('local', KEY_STORAGE, next)
-  showToast(
-    saved
-      ? 'API Key 已保存在当前浏览器'
-      : '账户已连接，本次页面关闭后需重新填写 Key',
-  )
+  showToast(t(saved ? 'toasts.keySaved' : 'toasts.keySessionOnly'))
 }
 
 function clearLocalKey() {
   draftKey.value = ''
   apiKey.value = ''
   removeStorage('local', KEY_STORAGE)
-  showToast('API Key 已从当前浏览器移除')
+  showToast(t('toasts.keyRemoved'))
 }
 
 function resetFilters() {
@@ -719,10 +757,10 @@ function markSiteIconFailed(url: string | null) {
 }
 
 function formatResultDate(value: string | null) {
-  if (!value) return '日期未知'
+  if (!value) return t('errors.dateUnknown')
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '日期未知'
-  return new Intl.DateTimeFormat('zh-CN', {
+  if (Number.isNaN(date.getTime())) return t('errors.dateUnknown')
+  return new Intl.DateTimeFormat(locale.value, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -730,13 +768,13 @@ function formatResultDate(value: string | null) {
 }
 
 function authorityLabel(authority: number) {
-  return authority >= 3 ? '可信来源' : ''
+  return authority >= 3 ? t('results.card.trustedSource') : ''
 }
 
 function relevanceLabel(score: number) {
-  if (score >= 2) return '高度相关'
-  if (score >= 1.5) return '相关'
-  if (score > 0) return '部分相关'
+  if (score >= 2) return t('results.card.relevanceHigh')
+  if (score >= 1.5) return t('results.card.relevance')
+  if (score > 0) return t('results.card.relevancePartial')
   return ''
 }
 
@@ -746,9 +784,9 @@ async function copyShareLink() {
     const url = new URL(window.location.href)
     if (term) writeSearchParams(url, term, snapshotFilters())
     await navigator.clipboard.writeText(url.toString())
-    showToast('分享链接已复制')
+    showToast(t('toasts.shareCopied'))
   } catch {
-    showToast('复制失败，请从地址栏复制')
+    showToast(t('toasts.copyFailed'))
   }
 }
 
@@ -800,26 +838,35 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell">
     <header class="topbar" :class="{ 'topbar--compact': hasSearched }">
-      <button class="brand" type="button" aria-label="返回首页" @click="goHome">
+      <button class="brand" type="button" :aria-label="t('app.backHome')" @click="goHome">
         <span class="brand__mark" aria-hidden="true">
           <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
         </span>
-        <span class="brand__word">寻迹</span>
+        <span class="brand__word">{{ t('app.brand') }}</span>
         <span class="brand__latin">DSSE</span>
       </button>
 
       <div class="topbar__meta">
-        <span class="powered-pill"><Sparkles :size="13" /> DeepSeek 实时搜索</span>
+        <span class="powered-pill"><Sparkles :size="13" /> {{ t('app.powered') }}</span>
         <span class="connection" :class="{ 'connection--ready': apiKey }">
           <span></span>{{ connectionLabel }}
         </span>
       </div>
 
       <div class="topbar__actions">
-        <button class="icon-button" type="button" aria-label="查看搜索技巧" @click="openGuide">
+        <button
+          class="locale-button"
+          type="button"
+          :aria-label="localeAriaLabel"
+          @click="toggleLocale"
+        >
+          <Languages :size="15" />
+          <span>{{ localeToggleLabel }}</span>
+        </button>
+        <button class="icon-button" type="button" :aria-label="t('app.viewGuide')" @click="openGuide">
           <BookOpenText :size="18" />
         </button>
-        <button class="key-button" type="button" aria-label="账户设置" @click="openSettings">
+        <button class="key-button" type="button" :aria-label="t('app.accountSettings')" @click="openSettings">
           <KeyRound :size="16" />
           <span>{{ keyLabel }}</span>
         </button>
@@ -828,16 +875,16 @@ onBeforeUnmount(() => {
 
     <main v-if="!hasSearched" class="landing">
       <div class="landing__ornament" aria-hidden="true">
-        <span>实时搜索 / 01</span>
-        <span>公开网页</span>
+        <span>{{ t('landing.ornamentFirst') }}</span>
+        <span>{{ t('landing.ornamentSecond') }}</span>
       </div>
 
       <section class="hero">
-        <p class="eyebrow"><span></span> 不做信息流，只找你要的答案</p>
-        <h1>在信息的缝隙里，<br /><em>寻到答案。</em></h1>
+        <p class="eyebrow"><span></span> {{ t('landing.eyebrow') }}</p>
+        <h1>{{ t('landing.titleStart') }}<br /><em>{{ t('landing.titleAccent') }}</em></h1>
         <p class="hero__intro">
-          搜索实时网页，找到真正相关的内容；需要细读时，再打开完整正文。<br class="desktop-break" />
-          只有成功获得结果时才会产生费用。
+          {{ t('landing.introLine1') }}<br class="desktop-break" />
+          {{ t('landing.introLine2') }}
         </p>
 
         <form class="hero-search" @submit.prevent="submitSearch">
@@ -849,20 +896,20 @@ onBeforeUnmount(() => {
             autocomplete="off"
             spellcheck="false"
             maxlength="128"
-            placeholder="搜索网页、新闻、研究或一个模糊的问题…"
-            aria-label="搜索"
+            :placeholder="t('landing.searchPlaceholder')"
+            :aria-label="t('app.search')"
           />
           <span class="hero-search__hint"><kbd>/</kbd></span>
-          <button type="submit" aria-label="开始搜索">
-            <span>寻迹</span>
+          <button type="submit" :aria-label="t('app.startSearch')">
+            <span>{{ t('app.brand') }}</span>
             <ArrowUpRight :size="18" />
           </button>
         </form>
 
         <div class="quick-row">
-          <span>试一试</span>
+          <span>{{ t('landing.try') }}</span>
           <button
-            v-for="term in QUICK_SEARCHES"
+            v-for="term in quickSearches"
             :key="term"
             type="button"
             @click="searchQuick(term)"
@@ -876,25 +923,25 @@ onBeforeUnmount(() => {
         <div class="feature-card feature-card--accent">
           <span class="feature-card__number">01</span>
           <Sparkles :size="20" />
-          <h2>先搜索，再细读</h2>
-          <p>先找到相关网页；需要完整内容时，再在当前页面里读取正文。</p>
+          <h2>{{ t('landing.features.search.title') }}</h2>
+          <p>{{ t('landing.features.search.body') }}</p>
         </div>
         <div class="feature-card">
           <span class="feature-card__number">02</span>
           <SlidersHorizontal :size="20" />
-          <h2>缩小范围</h2>
-          <p>按时间、语言和网站收窄结果，更快找到你真正需要的信息。</p>
+          <h2>{{ t('landing.features.narrow.title') }}</h2>
+          <p>{{ t('landing.features.narrow.body') }}</p>
         </div>
         <div class="feature-card">
           <span class="feature-card__number">03</span>
           <ShieldCheck :size="20" />
-          <h2>花费清楚</h2>
-          <p>搜索和读取正文只在你主动操作时进行；成功获得结果才会计费。</p>
+          <h2>{{ t('landing.features.cost.title') }}</h2>
+          <p>{{ t('landing.features.cost.body') }}</p>
         </div>
       </section>
 
       <div v-if="history.length" class="recent-strip">
-        <div class="recent-strip__title"><History :size="16" /> 最近搜索</div>
+        <div class="recent-strip__title"><History :size="16" /> {{ t('landing.recent') }}</div>
         <div class="recent-strip__items">
           <button
             v-for="item in history.slice(0, 4)"
@@ -919,20 +966,20 @@ onBeforeUnmount(() => {
             autocomplete="off"
             spellcheck="false"
             maxlength="128"
-            aria-label="搜索"
+            :aria-label="t('app.search')"
           />
           <button type="submit" :disabled="status === 'loading'">
             <LoaderCircle v-if="status === 'loading'" class="spin" :size="18" />
-            <template v-else>搜索 <span>↗</span></template>
+            <template v-else>{{ t('app.search') }} <span>↗</span></template>
           </button>
         </form>
         <div class="results-top__actions">
           <button class="filter-toggle" type="button" @click="filtersOpen = !filtersOpen">
             <SlidersHorizontal :size="16" />
-            筛选
+            {{ t('filters.heading') }}
             <span v-if="activeFilterCount">{{ activeFilterCount }}</span>
           </button>
-          <button class="icon-button" type="button" aria-label="复制分享链接" @click="copyShareLink">
+          <button class="icon-button" type="button" :aria-label="t('app.copyShare')" @click="copyShareLink">
             <Copy :size="17" />
           </button>
         </div>
@@ -940,7 +987,7 @@ onBeforeUnmount(() => {
 
       <div class="mobile-filter" :class="{ 'mobile-filter--open': filtersOpen }">
         <div class="filter-group">
-          <label>时间</label>
+          <label>{{ t('filters.time.label') }}</label>
           <div class="option-grid">
             <button
               v-for="option in timeOptions"
@@ -954,7 +1001,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="filter-group">
-          <label>语言</label>
+          <label>{{ t('filters.language.label') }}</label>
           <div class="option-grid">
             <button
               v-for="option in languageOptions"
@@ -968,23 +1015,25 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="filter-group">
-          <label for="mobile-site">指定网站</label>
-          <input id="mobile-site" v-model="filters.site" placeholder="例如 github.com" />
+          <label for="mobile-site">{{ t('filters.site.mobile') }}</label>
+          <input id="mobile-site" v-model="filters.site" :placeholder="t('filters.site.placeholder')" />
         </div>
-        <button class="apply-filter" type="button" @click="runSearch(query)">应用筛选</button>
+        <button class="apply-filter" type="button" @click="runSearch(query)">
+          {{ t('filters.apply') }}
+        </button>
       </div>
 
       <div class="results-layout">
         <aside class="search-aside" :class="{ 'search-aside--open': filtersOpen }">
           <div class="aside-heading">
-            <h2>筛选结果</h2>
+            <h2>{{ t('filters.heading') }}</h2>
             <button v-if="activeFilterCount" type="button" @click="resetFilters">
-              <RotateCcw :size="13" /> 重置
+              <RotateCcw :size="13" /> {{ t('filters.reset') }}
             </button>
           </div>
 
           <div class="filter-group">
-            <label><Clock3 :size="14" /> 时间范围</label>
+            <label><Clock3 :size="14" /> {{ t('filters.time.label') }}</label>
             <div class="filter-stack">
               <button
                 v-for="option in timeOptions"
@@ -999,7 +1048,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="filter-group">
-            <label><Globe2 :size="14" /> 网页语言</label>
+            <label><Globe2 :size="14" /> {{ t('filters.language.label') }}</label>
             <div class="segmented">
               <button
                 v-for="option in languageOptions"
@@ -1014,41 +1063,41 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="filter-group">
-            <label for="site-filter"><Telescope :size="14" /> 指定网站</label>
+            <label for="site-filter"><Telescope :size="14" /> {{ t('filters.site.aside') }}</label>
             <div class="site-input">
               <input
                 id="site-filter"
                 v-model="filters.site"
-                placeholder="github.com"
+                :placeholder="t('filters.sitePlaceholder')"
                 spellcheck="false"
               />
             </div>
           </div>
 
           <div class="filter-group">
-            <label for="count-filter">显示结果数</label>
+            <label for="count-filter">{{ t('filters.count') }}</label>
             <div class="range-row">
               <input id="count-filter" v-model.number="filters.count" type="range" min="5" max="20" step="5" />
               <output>{{ filters.count }}</output>
             </div>
-            <p class="filter-note">每次搜索按次计费，与显示的结果数量无关。</p>
+            <p class="filter-note">{{ t('filters.countNote') }}</p>
           </div>
 
           <label class="toggle-row">
             <span>
-              <strong>同时读取正文</strong>
-              <small>适合需要完整内容时</small>
+              <strong>{{ t('filters.content') }}</strong>
+              <small>{{ t('filters.contentHint') }}</small>
             </span>
             <input v-model="filters.needContent" type="checkbox" />
             <i></i>
           </label>
 
           <button class="aside-search" type="button" @click="runSearch(query)">
-            <SlidersHorizontal :size="15" /> 应用筛选并搜索
+            <SlidersHorizontal :size="15" /> {{ t('filters.applyAndSearch') }}
           </button>
 
           <div v-if="history.length" class="aside-history">
-            <div class="aside-history__title"><History :size="14" /> 最近搜索</div>
+            <div class="aside-history__title"><History :size="14" /> {{ t('landing.recent') }}</div>
             <button
               v-for="item in history.slice(0, 4)"
               :key="`${item.query}-${item.at}`"
@@ -1065,26 +1114,41 @@ onBeforeUnmount(() => {
             <div>
               <p class="results-heading__eyebrow">
                 <span class="live-dot"></span>
-                {{ status === 'loading' ? '正在搜索' : isCached ? '已载入刚才的结果' : '搜索完成' }}
+                {{
+                  status === 'loading'
+                    ? t('results.status.loading')
+                    : isCached
+                      ? t('results.status.cached')
+                      : t('results.status.complete')
+                }}
               </p>
               <h1>{{ resultHeading }}</h1>
             </div>
             <div class="results-toolbar">
               <span v-if="status === 'success' && results.length">
-                {{ isCached ? '已载入刚才的结果' : `用时 ${elapsed.toFixed(2)} 秒` }} ·
-                {{ activeFilterCount ? `${activeFilterCount} 项筛选` : '未添加筛选' }}
+                {{
+                  isCached
+                    ? t('results.status.cached')
+                    : t('results.elapsed', { seconds: elapsed.toFixed(2) })
+                }}
+                ·
+                {{
+                  activeFilterCount
+                    ? t('filters.filtersCount', { count: activeFilterCount })
+                    : t('filters.noFilters')
+                }}
               </span>
               <div class="sort-control">
                 <ArrowDownUp :size="14" />
-                <select v-model="sortMode" aria-label="排序方式">
-                  <option value="relevance">相关度优先</option>
-                  <option value="newest">时间优先</option>
+                <select v-model="sortMode" :aria-label="t('results.sortLabel')">
+                  <option value="relevance">{{ t('results.sort.relevance') }}</option>
+                  <option value="newest">{{ t('results.sort.newest') }}</option>
                 </select>
               </div>
             </div>
           </div>
 
-          <div v-if="status === 'loading'" class="skeleton-list" aria-label="正在搜索">
+          <div v-if="status === 'loading'" class="skeleton-list" :aria-label="t('results.loadingAria')">
             <article v-for="index in 4" :key="index" class="skeleton-card">
               <div class="skeleton-card__source"></div>
               <div class="skeleton-card__title"></div>
@@ -1096,23 +1160,23 @@ onBeforeUnmount(() => {
 
           <div v-else-if="status === 'error'" class="error-panel">
             <div class="error-panel__icon"><CircleAlert :size="28" /></div>
-            <p class="eyebrow"><span></span> 搜索遇到问题</p>
-            <h2>线索在这里断了</h2>
+            <p class="eyebrow"><span></span> {{ t('results.error.kicker') }}</p>
+            <h2>{{ t('results.error.title') }}</h2>
             <p>{{ errorMessage }}</p>
             <div class="error-panel__actions">
-              <button type="button" @click="runSearch(query)">再试一次</button>
+              <button type="button" @click="runSearch(query)">{{ t('results.error.retry') }}</button>
               <button class="ghost" type="button" @click="openSettings">
-                <KeyRound :size="15" /> 检查账户设置
+                <KeyRound :size="15" /> {{ t('results.error.checkAccount') }}
               </button>
             </div>
           </div>
 
           <div v-else-if="status === 'success' && !results.length" class="empty-panel">
             <div class="empty-panel__rings"><span></span><span></span><Search :size="28" /></div>
-            <p class="eyebrow"><span></span> 没有匹配结果</p>
-            <h2>换个问法，也许更近</h2>
-            <p>试试减少筛选条件、使用更通用的关键词，或检查站点范围是否过窄。</p>
-            <button type="button" @click="resetFilters">清除筛选条件</button>
+            <p class="eyebrow"><span></span> {{ t('results.empty.kicker') }}</p>
+            <h2>{{ t('results.empty.title') }}</h2>
+            <p>{{ t('results.empty.body') }}</p>
+            <button type="button" @click="resetFilters">{{ t('results.empty.clear') }}</button>
           </div>
 
           <div v-else class="result-list">
@@ -1147,12 +1211,16 @@ onBeforeUnmount(() => {
                 </div>
 
                 <button class="result-title" type="button" @click="openResult(result)">
-                  {{ result.title || '未命名网页' }}
+                  {{ result.title || t('results.card.untitled') }}
                   <PanelRightOpen :size="17" />
                 </button>
 
                 <p class="result-snippet">
-                  {{ result.snippet || result.summary || '该网页没有提供摘要，可打开原页面查看。' }}
+                  {{
+                    result.snippet ||
+                    result.summary ||
+                    t('results.card.fallbackSummary')
+                  }}
                 </p>
 
                 <div class="result-card__foot">
@@ -1171,7 +1239,7 @@ onBeforeUnmount(() => {
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    打开原网页 <ExternalLink :size="13" />
+                    {{ t('results.card.openOriginal') }} <ExternalLink :size="13" />
                   </a>
                 </div>
               </div>
@@ -1180,7 +1248,7 @@ onBeforeUnmount(() => {
 
           <div v-if="status === 'success' && results.length" class="end-marker">
             <span></span>
-            <p>这是本次搜索的全部 {{ results.length }} 条结果</p>
+            <p>{{ t('results.end', { count: results.length }) }}</p>
             <span></span>
           </div>
         </section>
@@ -1188,9 +1256,9 @@ onBeforeUnmount(() => {
     </main>
 
     <footer class="footer">
-      <p>寻迹 DSSE · 数据来自 DeepSeek 实时搜索</p>
+      <p>{{ t('footer.tagline') }}</p>
       <div>
-        <button type="button" @click="openGuide">搜索技巧</button>
+        <button type="button" @click="openGuide">{{ t('footer.guide') }}</button>
       </div>
     </footer>
 
@@ -1209,17 +1277,14 @@ onBeforeUnmount(() => {
             aria-labelledby="settings-title"
             tabindex="-1"
           >
-            <button class="modal__close" type="button" aria-label="关闭" @click="closeSettings">
+            <button class="modal__close" type="button" :aria-label="t('app.close')" @click="closeSettings">
               <X :size="18" />
             </button>
-            <div class="modal__kicker"><KeyRound :size="15" /> 账户连接</div>
-            <h2 id="settings-title">连接 DeepSeek</h2>
-            <p class="modal__intro">
-              填入 DeepSeek API Key 后即可开始搜索。Key 只用于访问 DeepSeek 的搜索与正文服务，
-              并保存在当前浏览器中。
-            </p>
+            <div class="modal__kicker"><KeyRound :size="15" /> {{ t('settings.kicker') }}</div>
+            <h2 id="settings-title">{{ t('settings.title') }}</h2>
+            <p class="modal__intro">{{ t('settings.intro') }}</p>
 
-            <label class="field-label" for="api-key">DeepSeek API Key</label>
+            <label class="field-label" for="api-key">{{ t('settings.field') }}</label>
             <div class="key-input">
               <KeyRound :size="17" />
               <input
@@ -1231,22 +1296,24 @@ onBeforeUnmount(() => {
                 placeholder="sk-…"
                 @keydown.enter="saveKey"
               />
-              <span>{{ draftKey ? '已填写' : '未填写' }}</span>
+              <span>{{ draftKey ? t('settings.filled') : t('settings.empty') }}</span>
             </div>
 
             <div class="notice">
               <ShieldCheck :size="18" />
               <p>
-                <strong>请像保管密码一样保管 Key。</strong>
-                如果你使用公用设备，离开前可以清除这里的 Key。
+                <strong>{{ t('settings.noticeTitle') }}</strong>
+                {{ t('settings.noticeBody') }}
               </p>
             </div>
 
             <div class="modal__actions">
               <button class="text-button" type="button" @click="clearLocalKey">
-                <Trash2 :size="14" /> 清除 Key
+                <Trash2 :size="14" /> {{ t('settings.clear') }}
               </button>
-              <button class="primary-button" type="button" @click="saveKey">保存设置</button>
+              <button class="primary-button" type="button" @click="saveKey">
+                {{ t('settings.save') }}
+              </button>
             </div>
           </section>
         </div>
@@ -1262,25 +1329,25 @@ onBeforeUnmount(() => {
             aria-labelledby="guide-title"
             tabindex="-1"
           >
-            <button class="modal__close" type="button" aria-label="关闭" @click="closeGuide">
+            <button class="modal__close" type="button" :aria-label="t('app.close')" @click="closeGuide">
               <X :size="18" />
             </button>
-            <div class="modal__kicker"><BookOpenText :size="15" /> 搜索技巧</div>
-            <h2 id="guide-title">让搜索更准确</h2>
-            <p class="modal__intro">在关键词后加入这些写法，可以更快把范围缩小到你关心的网站、语言和时间。</p>
+            <div class="modal__kicker"><BookOpenText :size="15" /> {{ t('guide.kicker') }}</div>
+            <h2 id="guide-title">{{ t('guide.title') }}</h2>
+            <p class="modal__intro">{{ t('guide.intro') }}</p>
             <div class="syntax-grid">
-              <code>site:github.com</code><span>只在指定站点内搜索</span>
-              <code>-site:example.com</code><span>排除指定站点</span>
-              <code>"精确短语"</code><span>精确匹配一段内容</span>
-              <code>lang:zh,en</code><span>限定网页语言</span>
-              <code>after:2026-01-01</code><span>限定发布时间之后</span>
-              <code>before:2026-12-31</code><span>限定发布时间之前</span>
+              <code>site:github.com</code><span>{{ t('guide.syntax.site') }}</span>
+              <code>-site:example.com</code><span>{{ t('guide.syntax.excludeSite') }}</span>
+              <code>{{ t('guide.examples.phrase') }}</code><span>{{ t('guide.syntax.phrase') }}</span>
+              <code>lang:zh,en</code><span>{{ t('guide.syntax.language') }}</span>
+              <code>after:2026-01-01</code><span>{{ t('guide.syntax.after') }}</span>
+              <code>before:2026-12-31</code><span>{{ t('guide.syntax.before') }}</span>
             </div>
             <div class="fetch-guide-note">
               <BookOpenText :size="18" />
               <p>
-                <strong>完整正文按需读取。</strong>
-                只有你打开结果并选择读取正文时才会发生；同一条结果在一次浏览中只会读取一次。
+                <strong>{{ t('guide.noteTitle') }}</strong>
+                {{ t('guide.noteBody') }}
               </p>
             </div>
           </section>
@@ -1298,8 +1365,8 @@ onBeforeUnmount(() => {
             tabindex="-1"
           >
             <div class="drawer__head">
-              <span>网页详情 · {{ domainOf(selectedResult.url) }}</span>
-              <button type="button" aria-label="关闭" @click="closeResult()">
+              <span>{{ t('drawer.label', { domain: domainOf(selectedResult.url) }) }}</span>
+              <button type="button" :aria-label="t('app.close')" @click="closeResult()">
                 <X :size="18" />
               </button>
             </div>
@@ -1308,7 +1375,7 @@ onBeforeUnmount(() => {
                 <span class="source-fallback">{{ domainOf(selectedResult.url).slice(0, 1).toUpperCase() }}</span>
                 <span>{{ selectedResult.site_name || domainOf(selectedResult.url) }}</span>
               </div>
-              <h2 id="drawer-title">{{ selectedResult.title || '未命名网页' }}</h2>
+              <h2 id="drawer-title">{{ selectedResult.title || t('results.card.untitled') }}</h2>
               <div class="drawer__meta">
                 <span>{{ formatResultDate(selectedResult.date) }}</span>
                 <span v-if="authorityLabel(selectedResult.authority)">
@@ -1321,7 +1388,7 @@ onBeforeUnmount(() => {
               <span class="drawer__url">{{ selectedResult.url }}</span>
               <div class="content-origin">
                 <span :title="fetchedTitle || selectedResult.title">{{ contentSource }}</span>
-                <span v-if="fetchedContent" class="content-origin__cached">本次已读取</span>
+                <span v-if="fetchedContent" class="content-origin__cached">{{ t('drawer.readThisTime') }}</span>
               </div>
               <div class="markdown-body" v-html="renderedContent"></div>
               <div v-if="!hasFullContent" class="fetch-panel" :class="{ 'fetch-panel--error': fetchStatus === 'error' }">
@@ -1332,26 +1399,38 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="fetch-panel__copy">
                   <h3>
-                    {{ fetchStatus === 'loading' ? '正在读取正文' : fetchStatus === 'error' ? '没有读到这条正文' : '读取完整正文' }}
+                    {{
+                      fetchStatus === 'loading'
+                        ? t('drawer.fetch.loading')
+                        : fetchStatus === 'error'
+                          ? t('drawer.fetch.error')
+                          : t('drawer.fetch.idle')
+                    }}
                   </h3>
                   <p v-if="fetchStatus === 'error'">{{ fetchError }}</p>
                   <p v-else>
-                    适合需要细看全文时使用。只有读取成功才会产生约 ¥0.005 的费用。
+                    {{ t('drawer.fetch.description') }}
                   </p>
                 </div>
                 <button type="button" :disabled="fetchStatus === 'loading'" @click="fetchResultContent">
                   <LoaderCircle v-if="fetchStatus === 'loading'" class="spin" :size="14" />
                   <BookOpenText v-else :size="14" />
-                  {{ fetchStatus === 'loading' ? '读取中' : fetchStatus === 'error' ? '重新读取' : '读取全文' }}
+                  {{
+                    fetchStatus === 'loading'
+                      ? t('drawer.fetch.reading')
+                      : fetchStatus === 'error'
+                        ? t('drawer.fetch.retry')
+                        : t('drawer.fetch.action')
+                  }}
                 </button>
               </div>
               <p v-else class="drawer__note">
-                已显示完整正文。本次浏览期间再次打开这条结果，不会重复读取或收费。
+                {{ t('drawer.fetch.complete') }}
               </p>
             </div>
             <div class="drawer__foot">
               <a :href="selectedResult.url" target="_blank" rel="noopener noreferrer">
-                打开原网页 <ExternalLink :size="15" />
+                {{ t('drawer.openOriginal') }} <ExternalLink :size="15" />
               </a>
             </div>
           </aside>

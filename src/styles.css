@@ -247,6 +247,25 @@ select:focus-visible {
   transition: background 160ms ease;
 }
 
+.locale-button {
+  display: flex;
+  height: 38px;
+  padding: 0 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 9px;
+  gap: 6px;
+  transition: background 160ms ease;
+}
+
+.locale-button:hover {
+  background: rgba(255, 255, 255, 0.45);
+}
+
 .key-button:hover {
   background: rgba(255, 255, 255, 0.45);
 }
