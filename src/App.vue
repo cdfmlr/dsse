@@ -98,6 +98,10 @@ const settingsOpen = ref(false)
 const guideOpen = ref(false)
 const filtersOpen = ref(false)
 const selectedResult = ref<SearchResult | null>(null)
+const settingsDialog = ref<HTMLElement | null>(null)
+const guideDialog = ref<HTMLElement | null>(null)
+const resultDialog = ref<HTMLElement | null>(null)
+const failedSiteIcons = reactive(new Set<string>())
 const fetchStatus = ref<'idle' | 'loading' | 'success' | 'error'>('idle')
 const fetchError = ref('')
 const fetchedContent = ref('')
@@ -118,6 +122,8 @@ const filters = reactive<SearchFilters>({
 let controller: AbortController | null = null
 let fetchController: AbortController | null = null
 let toastTimer: number | null = null
+type DialogKind = 'settings' | 'guide' | 'result'
+const dialogReturnFocus = new Map<DialogKind, HTMLElement | null>()
 
 const hasSearched = computed(() => submittedQuery.value.trim().length > 0)
 const sortedResults = computed(() => {
@@ -194,6 +200,61 @@ function showToast(message: string) {
   }, 2400)
 }
 
+function rememberDialogFocus(kind: DialogKind) {
+  const active = document.activeElement
+  dialogReturnFocus.set(kind, active instanceof HTMLElement ? active : null)
+}
+
+function focusDialog(kind: DialogKind) {
+  rememberDialogFocus(kind)
+  nextTick(() => activeDialogElement()?.focus())
+}
+
+function restoreDialogFocus(kind: DialogKind) {
+  const target = dialogReturnFocus.get(kind)
+  dialogReturnFocus.delete(kind)
+  nextTick(() => {
+    if (target?.isConnected) target.focus()
+  })
+}
+
+function activeDialogElement() {
+  if (settingsOpen.value) return settingsDialog.value
+  if (guideOpen.value) return guideDialog.value
+  if (selectedResult.value) return resultDialog.value
+  return null
+}
+
+function handleDialogTab(event: KeyboardEvent) {
+  const dialog = activeDialogElement()
+  if (!dialog) return
+
+  const focusable = Array.from(
+    dialog.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.offsetParent !== null)
+
+  if (!focusable.length) {
+    event.preventDefault()
+    dialog.focus()
+    return
+  }
+
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  const active = document.activeElement
+  const focusIsOutside = !dialog.contains(active)
+
+  if (event.shiftKey && (active === first || active === dialog || focusIsOutside)) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && (active === last || focusIsOutside)) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
 function focusSearch() {
   nextTick(() => searchInput.value?.focus())
 }
@@ -220,10 +281,20 @@ function formatDateOffset(days: number) {
   return `${year}-${month}-${day}`
 }
 
-function buildApiQuery(base: string) {
+function snapshotFilters(): SearchFilters {
+  return {
+    time: filters.time,
+    language: filters.language,
+    site: filters.site,
+    count: filters.count,
+    needContent: filters.needContent,
+  }
+}
+
+function buildApiQuery(base: string, options: SearchFilters) {
   const parts = [base.trim()]
-  if (filters.language !== 'auto') parts.push(`lang:${filters.language}`)
-  const site = filters.site.trim().replace(/^site:/, '')
+  if (options.language !== 'auto') parts.push(`lang:${options.language}`)
+  const site = options.site.trim().replace(/^site:/, '')
   if (site) parts.push(`site:${site}`)
 
   const offsets: Record<TimeRange, number | null> = {
@@ -233,7 +304,7 @@ function buildApiQuery(base: string) {
     month: 30,
     year: 365,
   }
-  const days = offsets[filters.time]
+  const days = offsets[options.time]
   if (days) parts.push(`after:${formatDateOffset(days)}`)
   return parts.join(' ')
 }
@@ -246,24 +317,29 @@ function shortHash(value: string) {
   return (hash >>> 0).toString(36)
 }
 
-function searchCacheSignature(apiQuery: string) {
-  return JSON.stringify([apiQuery, filters.count, filters.needContent])
+interface SearchRequestOptions {
+  count: number
+  needContent: boolean
 }
 
-function readCache(apiQuery: string) {
+function searchCacheSignature(apiQuery: string, options: SearchRequestOptions) {
+  return JSON.stringify([apiQuery, options.count, options.needContent])
+}
+
+function readCache(apiQuery: string, options: SearchRequestOptions) {
   try {
     const cache = JSON.parse(readStorage('session', SESSION_CACHE) || '{}') as Record<
       string,
       { results: SearchResult[]; at: number }
     >
-    return cache[shortHash(searchCacheSignature(apiQuery))] || null
+    return cache[shortHash(searchCacheSignature(apiQuery, options))] || null
   } catch {
     return null
   }
 }
 
-function writeCache(apiQuery: string, value: SearchResult[]) {
-  if (filters.needContent) return
+function writeCache(apiQuery: string, options: SearchRequestOptions, value: SearchResult[]) {
+  if (options.needContent) return
   try {
     const cache = JSON.parse(readStorage('session', SESSION_CACHE) || '{}') as Record<
       string,
@@ -271,7 +347,10 @@ function writeCache(apiQuery: string, value: SearchResult[]) {
     >
     const entries = Object.entries(cache).sort(([, a], [, b]) => b.at - a.at).slice(0, 4)
     const trimmed = Object.fromEntries(entries)
-    trimmed[shortHash(searchCacheSignature(apiQuery))] = { results: value, at: Date.now() }
+    trimmed[shortHash(searchCacheSignature(apiQuery, options))] = {
+      results: value,
+      at: Date.now(),
+    }
     writeStorage('session', SESSION_CACHE, JSON.stringify(trimmed))
   } catch {
     // A full or unavailable session store should never block a search.
@@ -314,10 +393,48 @@ function saveHistory(term: string) {
   writeStorage('local', HISTORY_STORAGE, JSON.stringify(next))
 }
 
-function updateUrl(term: string) {
-  const url = new URL(window.location.href)
+const SEARCH_PARAM_KEYS = ['q', 'time', 'lang', 'site', 'count', 'content'] as const
+
+function writeSearchParams(url: URL, term: string, options: SearchFilters) {
   url.searchParams.set('q', term)
+
+  if (options.time === 'any') url.searchParams.delete('time')
+  else url.searchParams.set('time', options.time)
+
+  if (options.language === 'auto') url.searchParams.delete('lang')
+  else url.searchParams.set('lang', options.language)
+
+  const site = options.site.trim()
+  if (site) url.searchParams.set('site', site)
+  else url.searchParams.delete('site')
+
+  if (options.count === 10) url.searchParams.delete('count')
+  else url.searchParams.set('count', String(options.count))
+
+  if (options.needContent) url.searchParams.set('content', '1')
+  else url.searchParams.delete('content')
+}
+
+function updateUrl(term: string, options: SearchFilters) {
+  const url = new URL(window.location.href)
+  writeSearchParams(url, term, options)
   window.history.replaceState({}, '', url)
+}
+
+function restoreFiltersFromUrl(url: URL) {
+  const time = url.searchParams.get('time')
+  if (timeOptions.some((option) => option.value === time)) filters.time = time as TimeRange
+
+  const language = url.searchParams.get('lang')
+  if (languageOptions.some((option) => option.value === language)) {
+    filters.language = language as Language
+  }
+
+  filters.site = url.searchParams.get('site') || ''
+
+  const count = Number(url.searchParams.get('count'))
+  if ([5, 10, 15, 20].includes(count)) filters.count = count
+  filters.needContent = url.searchParams.get('content') === '1'
 }
 
 function openResult(result: SearchResult) {
@@ -334,21 +451,23 @@ function openResult(result: SearchResult) {
     fetchedContent.value = cached.content
     fetchStatus.value = 'success'
   }
+  focusDialog('result')
 }
 
-function closeResult() {
+function closeResult(restoreFocus = true) {
   fetchController?.abort()
   selectedResult.value = null
   fetchStatus.value = 'idle'
   fetchError.value = ''
+  if (restoreFocus) restoreDialogFocus('result')
+  else dialogReturnFocus.delete('result')
 }
 
 async function fetchResultContent() {
   const page = selectedResult.value
   if (!page || fetchStatus.value === 'loading') return
   if (!apiKey.value) {
-    draftKey.value = ''
-    settingsOpen.value = true
+    openSettings()
     showToast('请先配置 DeepSeek API Key')
     return
   }
@@ -428,13 +547,13 @@ async function runSearch(term: string) {
     return
   }
   if (!apiKey.value) {
-    draftKey.value = ''
-    settingsOpen.value = true
+    openSettings()
     showToast('请先配置 DeepSeek API Key')
     return
   }
 
-  const apiQuery = buildApiQuery(clean)
+  const requestFilters = snapshotFilters()
+  const apiQuery = buildApiQuery(clean, requestFilters)
   if (apiQuery.length > SEARCH_LIMIT) {
     errorMessage.value = `搜索内容有点长，请控制在 ${SEARCH_LIMIT} 个字符以内（含筛选条件）。`
     status.value = 'error'
@@ -444,13 +563,15 @@ async function runSearch(term: string) {
 
   query.value = clean
   submittedQuery.value = clean
-  updateUrl(clean)
+  updateUrl(clean, requestFilters)
   saveHistory(clean)
-  closeResult()
+  closeResult(false)
   filtersOpen.value = false
   isCached.value = false
 
-  const cached = readCache(apiQuery)
+  controller?.abort()
+  controller = null
+  const cached = readCache(apiQuery, requestFilters)
   if (cached) {
     results.value = cached.results
     elapsed.value = 0
@@ -459,7 +580,6 @@ async function runSearch(term: string) {
     return
   }
 
-  controller?.abort()
   controller = new AbortController()
   status.value = 'loading'
   results.value = []
@@ -475,8 +595,8 @@ async function runSearch(term: string) {
       },
       body: JSON.stringify({
         query: apiQuery,
-        count: filters.count,
-        need_content: filters.needContent,
+        count: requestFilters.count,
+        need_content: requestFilters.needContent,
       }),
       signal: controller.signal,
     })
@@ -506,7 +626,7 @@ async function runSearch(term: string) {
     results.value = payload.results
     elapsed.value = Math.max(0.01, (performance.now() - startedAt) / 1000)
     status.value = 'success'
-    writeCache(apiQuery, payload.results)
+    writeCache(apiQuery, requestFilters, payload.results)
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     errorMessage.value =
@@ -525,9 +645,9 @@ function goHome() {
   status.value = 'idle'
   results.value = []
   errorMessage.value = ''
-  closeResult()
+  closeResult(false)
   const url = new URL(window.location.href)
-  url.searchParams.delete('q')
+  SEARCH_PARAM_KEYS.forEach((key) => url.searchParams.delete(key))
   window.history.replaceState({}, '', url)
   focusSearch()
 }
@@ -535,12 +655,28 @@ function goHome() {
 function openSettings() {
   draftKey.value = apiKey.value
   settingsOpen.value = true
+  focusDialog('settings')
+}
+
+function closeSettings() {
+  settingsOpen.value = false
+  restoreDialogFocus('settings')
+}
+
+function openGuide() {
+  guideOpen.value = true
+  focusDialog('guide')
+}
+
+function closeGuide() {
+  guideOpen.value = false
+  restoreDialogFocus('guide')
 }
 
 function saveKey() {
   const next = draftKey.value.trim()
   apiKey.value = next
-  settingsOpen.value = false
+  closeSettings()
   if (!next) {
     removeStorage('local', KEY_STORAGE)
     showToast('API Key 已从当前浏览器移除')
@@ -578,6 +714,10 @@ function domainOf(url: string) {
   }
 }
 
+function markSiteIconFailed(url: string | null) {
+  if (url) failedSiteIcons.add(url)
+}
+
 function formatResultDate(value: string | null) {
   if (!value) return '日期未知'
   const date = new Date(value)
@@ -602,7 +742,10 @@ function relevanceLabel(score: number) {
 
 async function copyShareLink() {
   try {
-    await navigator.clipboard.writeText(window.location.href)
+    const term = query.value.trim() || submittedQuery.value
+    const url = new URL(window.location.href)
+    if (term) writeSearchParams(url, term, snapshotFilters())
+    await navigator.clipboard.writeText(url.toString())
     showToast('分享链接已复制')
   } catch {
     showToast('复制失败，请从地址栏复制')
@@ -614,20 +757,34 @@ function handleKeydown(event: KeyboardEvent) {
   const isTyping =
     target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable
 
-  if (event.key === 'Escape') {
-    settingsOpen.value = false
-    guideOpen.value = false
-    filtersOpen.value = false
-    closeResult()
+  if (event.key === 'Tab') {
+    handleDialogTab(event)
+    return
   }
-  if (!isTyping && (event.key === '/' || ((event.metaKey || event.ctrlKey) && event.key === 'k'))) {
+
+  if (event.key === 'Escape') {
+    if (settingsOpen.value) closeSettings()
+    else if (guideOpen.value) closeGuide()
+    else if (selectedResult.value) closeResult()
+    else if (filtersOpen.value) filtersOpen.value = false
+    return
+  }
+
+  const dialogOpen = Boolean(settingsOpen.value || guideOpen.value || selectedResult.value)
+  if (
+    !isTyping &&
+    !dialogOpen &&
+    (event.key === '/' || ((event.metaKey || event.ctrlKey) && event.key === 'k'))
+  ) {
     event.preventDefault()
     focusSearch()
   }
 }
 
 onMounted(() => {
-  const initialQuery = new URL(window.location.href).searchParams.get('q')
+  const initialUrl = new URL(window.location.href)
+  restoreFiltersFromUrl(initialUrl)
+  const initialQuery = initialUrl.searchParams.get('q')
   if (initialQuery) query.value = initialQuery
   window.addEventListener('keydown', handleKeydown)
 })
@@ -659,7 +816,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="topbar__actions">
-        <button class="icon-button" type="button" aria-label="查看搜索技巧" @click="guideOpen = true">
+        <button class="icon-button" type="button" aria-label="查看搜索技巧" @click="openGuide">
           <BookOpenText :size="18" />
         </button>
         <button class="key-button" type="button" aria-label="账户设置" @click="openSettings">
@@ -972,14 +1129,19 @@ onBeforeUnmount(() => {
               <div class="result-card__body">
                 <div class="result-card__source">
                   <img
-                    v-if="result.site_icon"
+                    v-if="result.site_icon && !failedSiteIcons.has(result.site_icon)"
                     :src="result.site_icon"
                     alt=""
                     loading="lazy"
                     referrerpolicy="no-referrer"
-                    @error="($event.target as HTMLImageElement).style.display = 'none'"
+                    @error="markSiteIconFailed(result.site_icon)"
                   />
-                  <span class="source-fallback">{{ domainOf(result.url).slice(0, 1).toUpperCase() }}</span>
+                  <span
+                    v-if="!result.site_icon || failedSiteIcons.has(result.site_icon)"
+                    class="source-fallback"
+                  >
+                    {{ domainOf(result.url).slice(0, 1).toUpperCase() }}
+                  </span>
                   <span class="source-name">{{ result.site_name || domainOf(result.url) }}</span>
                   <span class="source-domain">{{ domainOf(result.url) }}</span>
                 </div>
@@ -1028,7 +1190,7 @@ onBeforeUnmount(() => {
     <footer class="footer">
       <p>寻迹 DSSE · 数据来自 DeepSeek 实时搜索</p>
       <div>
-        <button type="button" @click="guideOpen = true">搜索技巧</button>
+        <button type="button" @click="openGuide">搜索技巧</button>
       </div>
     </footer>
 
@@ -1038,9 +1200,16 @@ onBeforeUnmount(() => {
 
     <Teleport to="body">
       <Transition name="fade">
-        <div v-if="settingsOpen" class="modal-backdrop" @click.self="settingsOpen = false">
-          <section class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-            <button class="modal__close" type="button" aria-label="关闭" @click="settingsOpen = false">
+        <div v-if="settingsOpen" class="modal-backdrop" @click.self="closeSettings">
+          <section
+            ref="settingsDialog"
+            class="modal settings-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-title"
+            tabindex="-1"
+          >
+            <button class="modal__close" type="button" aria-label="关闭" @click="closeSettings">
               <X :size="18" />
             </button>
             <div class="modal__kicker"><KeyRound :size="15" /> 账户连接</div>
@@ -1084,9 +1253,16 @@ onBeforeUnmount(() => {
       </Transition>
 
       <Transition name="fade">
-        <div v-if="guideOpen" class="modal-backdrop" @click.self="guideOpen = false">
-          <section class="modal guide-modal" role="dialog" aria-modal="true" aria-labelledby="guide-title">
-            <button class="modal__close" type="button" aria-label="关闭" @click="guideOpen = false">
+        <div v-if="guideOpen" class="modal-backdrop" @click.self="closeGuide">
+          <section
+            ref="guideDialog"
+            class="modal guide-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="guide-title"
+            tabindex="-1"
+          >
+            <button class="modal__close" type="button" aria-label="关闭" @click="closeGuide">
               <X :size="18" />
             </button>
             <div class="modal__kicker"><BookOpenText :size="15" /> 搜索技巧</div>
@@ -1112,11 +1288,18 @@ onBeforeUnmount(() => {
       </Transition>
 
       <Transition name="drawer">
-        <div v-if="selectedResult" class="drawer-backdrop" @click.self="closeResult">
-          <aside class="result-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+        <div v-if="selectedResult" class="drawer-backdrop" @click.self="closeResult()">
+          <aside
+            ref="resultDialog"
+            class="result-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="drawer-title"
+            tabindex="-1"
+          >
             <div class="drawer__head">
               <span>网页详情 · {{ domainOf(selectedResult.url) }}</span>
-              <button type="button" aria-label="关闭" @click="closeResult">
+              <button type="button" aria-label="关闭" @click="closeResult()">
                 <X :size="18" />
               </button>
             </div>

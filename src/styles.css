@@ -1159,10 +1159,6 @@ select:focus-visible {
   font-size: 9px;
 }
 
-.result-card__source:has(img) .source-fallback {
-  display: none;
-}
-
 .source-name {
   font-weight: 600;
 }
@@ -1535,7 +1531,6 @@ select:focus-visible {
 .modal-backdrop,
 .drawer-backdrop {
   position: fixed;
-  z-index: 90;
   inset: 0;
   display: flex;
   align-items: center;
@@ -1544,10 +1539,18 @@ select:focus-visible {
   backdrop-filter: blur(7px);
 }
 
+.modal-backdrop {
+  z-index: 95;
+}
+
 .modal {
   position: relative;
   width: min(480px, calc(100% - 32px));
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   padding: 36px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--line-strong);
   border-radius: 3px;
   background:
@@ -1757,6 +1760,7 @@ select:focus-visible {
 }
 
 .drawer-backdrop {
+  z-index: 90;
   justify-content: flex-end;
 }
 
