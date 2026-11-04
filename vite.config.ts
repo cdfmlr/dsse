@@ -9,8 +9,11 @@ export default defineConfig(({ mode }) => {
         'Enter the key in the app at runtime or use a backend proxy.',
     )
   }
+  const basePath = env.VITE_BASE_PATH?.trim() || '/'
+  const base = basePath === '/' ? '/' : `${basePath.replace(/\/+$/, '')}/`
 
   return {
+    base,
     plugins: [vue()],
   }
 })

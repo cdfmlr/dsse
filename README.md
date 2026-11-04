@@ -31,3 +31,12 @@ pnpm preview
 
 纯前端模式仍意味着用户输入的 Key 会直接发送到 DeepSeek。面向不特定用户公开部署时，
 建议增加自有后端代理，不要向访问者分发可复用的 API Key。
+
+## 部署到 GitHub Pages
+
+仓库已包含 `.github/workflows/deploy-pages.yml`。推送到 `main` 后，工作流会自动构建并部署
+`dist`；也可以在 Actions 页面手动触发。
+
+首次使用时，在仓库的 **Settings → Pages → Build and deployment** 中将 Source 设为
+**GitHub Actions**。工作流会通过 `actions/configure-pages` 自动设置仓库子路径，项目页和
+自定义域名均可使用。
