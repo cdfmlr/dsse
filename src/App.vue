@@ -5,7 +5,6 @@ import {
   ArrowUpRight,
   BookOpenText,
   Check,
-  ChevronLeft,
   CircleAlert,
   Clock3,
   Copy,
@@ -14,6 +13,7 @@ import {
   History,
   KeyRound,
   LoaderCircle,
+  PanelRightOpen,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -984,10 +984,10 @@ onBeforeUnmount(() => {
                   <span class="source-domain">{{ domainOf(result.url) }}</span>
                 </div>
 
-                <a class="result-title" :href="result.url" target="_blank" rel="noopener noreferrer">
+                <button class="result-title" type="button" @click="openResult(result)">
                   {{ result.title || '未命名网页' }}
-                  <ArrowUpRight :size="17" />
-                </a>
+                  <PanelRightOpen :size="17" />
+                </button>
 
                 <p class="result-snippet">
                   {{ result.snippet || result.summary || '该网页没有提供摘要，可打开原页面查看。' }}
@@ -1003,9 +1003,14 @@ onBeforeUnmount(() => {
                       {{ relevanceLabel(result.rerank_score) }}
                     </span>
                   </div>
-                  <button type="button" @click="openResult(result)">
-                    查看内容 <ChevronLeft :size="13" />
-                  </button>
+                  <a
+                    class="result-card__link"
+                    :href="result.url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    打开原网页 <ExternalLink :size="13" />
+                  </a>
                 </div>
               </div>
             </article>
@@ -1130,9 +1135,7 @@ onBeforeUnmount(() => {
                   {{ relevanceLabel(selectedResult.rerank_score) }}
                 </span>
               </div>
-              <a class="drawer__url" :href="selectedResult.url" target="_blank" rel="noreferrer">
-                {{ selectedResult.url }} <ArrowUpRight :size="13" />
-              </a>
+              <span class="drawer__url">{{ selectedResult.url }}</span>
               <div class="content-origin">
                 <span :title="fetchedTitle || selectedResult.title">{{ contentSource }}</span>
                 <span v-if="fetchedContent" class="content-origin__cached">本次已读取</span>
@@ -1164,7 +1167,7 @@ onBeforeUnmount(() => {
               </p>
             </div>
             <div class="drawer__foot">
-              <a :href="selectedResult.url" target="_blank" rel="noreferrer">
+              <a :href="selectedResult.url" target="_blank" rel="noopener noreferrer">
                 打开原网页 <ExternalLink :size="15" />
               </a>
             </div>
