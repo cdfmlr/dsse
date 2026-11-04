@@ -135,7 +135,8 @@ const activeFilterCount = computed(
     Number(filters.site.trim().length > 0) +
     Number(filters.needContent),
 )
-const keyLabel = computed(() => (apiKey.value ? `•••• ${apiKey.value.slice(-4)}` : '未配置'))
+const keyLabel = computed(() => (apiKey.value ? '账户已连接' : '连接账户'))
+const connectionLabel = computed(() => (apiKey.value ? '准备就绪' : '连接后开始'))
 const resultHeading = computed(() => {
   if (status.value === 'loading') return '正在穿过网页，寻找相关线索'
   if (status.value === 'error') return '这次没有找到答案'
@@ -158,9 +159,8 @@ const hasFullContent = computed(
   () => Boolean(fetchedContent.value || selectedResult.value?.content),
 )
 const contentSource = computed(() => {
-  if (fetchedContent.value) return 'FETCH · 网页正文'
-  if (selectedResult.value?.content) return 'SEARCH · 网页正文'
-  return 'SEARCH · 摘要'
+  if (fetchedContent.value || selectedResult.value?.content) return '完整正文'
+  return '网页摘要'
 })
 
 const timeOptions: Array<{ value: TimeRange; label: string }> = [
@@ -358,7 +358,7 @@ async function fetchResultContent() {
     fetchedTitle.value = cached.title
     fetchedContent.value = cached.content
     fetchStatus.value = 'success'
-    showToast('已复用本次会话抓取的正文')
+    showToast('已载入刚才读取的正文')
     return
   }
 
@@ -381,23 +381,21 @@ async function fetchResultContent() {
     const payload = (await response.json().catch(() => ({}))) as Partial<FetchResponse> &
       ApiErrorShape
     if (!response.ok) {
-      const serverMessage = payload.error?.message || ''
       const friendly: Record<number, string> = {
-        400: '网页地址不合法，无法抓取。',
-        401: 'API Key 无效或已失效，请在设置中更换。',
+        400: '这条网页暂时无法读取。',
+        401: 'API Key 无效或已失效，请重新连接账户。',
         402: '账户余额不足，请前往 DeepSeek 开放平台充值。',
-        403: '该网页被安全策略拒绝抓取。',
-        404: '未能从该网页提取到有效正文。',
-        408: '读取请求超时，请稍后再试。',
-        413: '网页内容超过抓取大小限制。',
-        429: '抓取请求过于频繁，请稍等片刻再试。',
-        500: 'DeepSeek 抓取服务暂时出错。',
-        504: '抓取服务响应超时，请稍后再试。',
+        403: '该网页不允许读取正文。',
+        404: '没有从这条网页中找到可阅读的正文。',
+        408: '读取时间有点久，请稍后再试。',
+        413: '这条网页的正文太长，暂时无法完整读取。',
+        429: '读取得有点频繁，请稍等片刻。',
+        500: 'DeepSeek 暂时无法读取这条正文。',
+        504: '读取响应超时，请稍后再试。',
       }
       throw new Error(
-        `${friendly[response.status] || `抓取失败（HTTP ${response.status}）`}${
-          serverMessage ? ` ${serverMessage}` : ''
-        }`,
+        friendly[response.status] ||
+          `暂时无法读取这条正文，请稍后再试（HTTP ${response.status}）`,
       )
     }
 
@@ -410,15 +408,15 @@ async function fetchResultContent() {
     fetchedContent.value = payload.content
     fetchStatus.value = 'success'
     writeFetchCache(page.url, fetchedTitle.value, payload.content)
-    showToast('网页正文已抓取')
+    showToast('正文已准备好')
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     fetchError.value =
       error instanceof TypeError
-        ? '无法连接抓取服务，请检查网络或浏览器跨域限制。'
+        ? '无法读取网页正文，请检查网络后重试。'
         : error instanceof Error
           ? error.message
-          : '抓取网页时发生未知错误。'
+          : '暂时无法读取网页正文。'
     fetchStatus.value = 'error'
   }
 }
@@ -438,7 +436,7 @@ async function runSearch(term: string) {
 
   const apiQuery = buildApiQuery(clean)
   if (apiQuery.length > SEARCH_LIMIT) {
-    errorMessage.value = `搜索词与筛选条件共 ${apiQuery.length} 个字符，请控制在 ${SEARCH_LIMIT} 个以内。`
+    errorMessage.value = `搜索内容有点长，请控制在 ${SEARCH_LIMIT} 个字符以内（含筛选条件）。`
     status.value = 'error'
     submittedQuery.value = clean
     return
@@ -485,27 +483,24 @@ async function runSearch(term: string) {
 
     const payload = (await response.json().catch(() => ({}))) as SearchResponse & ApiErrorShape
     if (!response.ok) {
-      const serverMessage = payload.error?.message || ''
       const friendly: Record<number, string> = {
-        400: '请求参数不正确，请检查搜索词与筛选条件。',
-        401: 'API Key 无效或已失效，请在设置中更换。',
+        400: '搜索条件有些问题，请调整后再试。',
+        401: 'API Key 无效或已失效，请重新连接账户。',
         402: '账户余额不足，请前往 DeepSeek 开放平台充值。',
-        403: '请求被安全策略拒绝。',
-        408: '读取请求超时，请稍后再试。',
-        413: '请求内容过大。',
-        429: '请求过于频繁，请稍等片刻再搜。',
-        500: 'DeepSeek 搜索服务暂时出错。',
-        504: '搜索服务响应超时，请稍后再试。',
+        403: '这次搜索没有被允许，请调整关键词后再试。',
+        408: '搜索时间有点久，请稍后再试。',
+        413: '搜索内容过长，请精简后再试。',
+        429: '搜索得有点快，请稍等片刻。',
+        500: 'DeepSeek 搜索暂时不可用。',
+        504: '搜索响应超时，请稍后再试。',
       }
       throw new Error(
-        `${friendly[response.status] || `请求失败（HTTP ${response.status}）`}${
-          serverMessage ? ` ${serverMessage}` : ''
-        }`,
+        friendly[response.status] || '暂时无法完成搜索，请稍后再试。',
       )
     }
 
     if (!Array.isArray(payload.results)) {
-      throw new Error('接口返回格式异常，请稍后再试。')
+      throw new Error('搜索结果暂时无法显示，请稍后再试。')
     }
 
     results.value = payload.results
@@ -516,10 +511,10 @@ async function runSearch(term: string) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     errorMessage.value =
       error instanceof TypeError
-        ? '无法连接搜索服务，请检查网络或浏览器跨域限制。'
+        ? '无法连接搜索服务，请检查网络后重试。'
         : error instanceof Error
           ? error.message
-          : '搜索时发生未知错误。'
+          : '搜索暂时无法完成，请稍后再试。'
     status.value = 'error'
   }
 }
@@ -548,19 +543,23 @@ function saveKey() {
   settingsOpen.value = false
   if (!next) {
     removeStorage('local', KEY_STORAGE)
-    showToast('API Key 已清除')
+    showToast('API Key 已从当前浏览器移除')
     return
   }
 
   const saved = writeStorage('local', KEY_STORAGE, next)
-  showToast(saved ? 'API Key 已保存在当前浏览器' : 'Key 仅本次页面有效：浏览器存储不可用')
+  showToast(
+    saved
+      ? 'API Key 已保存在当前浏览器'
+      : '账户已连接，本次页面关闭后需重新填写 Key',
+  )
 }
 
 function clearLocalKey() {
   draftKey.value = ''
   apiKey.value = ''
   removeStorage('local', KEY_STORAGE)
-  showToast('已清除本地 API Key')
+  showToast('API Key 已从当前浏览器移除')
 }
 
 function resetFilters() {
@@ -591,13 +590,14 @@ function formatResultDate(value: string | null) {
 }
 
 function authorityLabel(authority: number) {
-  if (authority >= 3) return '高权威'
-  if (authority >= 1) return '有信誉'
-  return '来源待核'
+  return authority >= 3 ? '可信来源' : ''
 }
 
-function scoreLabel(score: number) {
-  return Number.isFinite(score) ? score.toFixed(1) : '—'
+function relevanceLabel(score: number) {
+  if (score >= 2) return '高度相关'
+  if (score >= 1.5) return '相关'
+  if (score > 0) return '部分相关'
+  return ''
 }
 
 async function copyShareLink() {
@@ -648,21 +648,21 @@ onBeforeUnmount(() => {
           <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
         </span>
         <span class="brand__word">寻迹</span>
-        <span class="brand__latin">SIFT</span>
+        <span class="brand__latin">DSSE</span>
       </button>
 
       <div class="topbar__meta">
-        <span class="powered-pill"><Sparkles :size="13" /> DeepSeek Search + Fetch</span>
+        <span class="powered-pill"><Sparkles :size="13" /> DeepSeek 实时搜索</span>
         <span class="connection" :class="{ 'connection--ready': apiKey }">
-          <span></span>{{ apiKey ? 'API READY' : 'KEY REQUIRED' }}
+          <span></span>{{ connectionLabel }}
         </span>
       </div>
 
       <div class="topbar__actions">
-        <button class="icon-button" type="button" aria-label="查看搜索语法" @click="guideOpen = true">
+        <button class="icon-button" type="button" aria-label="查看搜索技巧" @click="guideOpen = true">
           <BookOpenText :size="18" />
         </button>
-        <button class="key-button" type="button" @click="openSettings">
+        <button class="key-button" type="button" aria-label="账户设置" @click="openSettings">
           <KeyRound :size="16" />
           <span>{{ keyLabel }}</span>
         </button>
@@ -671,16 +671,16 @@ onBeforeUnmount(() => {
 
     <main v-if="!hasSearched" class="landing">
       <div class="landing__ornament" aria-hidden="true">
-        <span>SEARCH / 01</span>
-        <span>REAL-TIME WEB INDEX</span>
+        <span>实时搜索 / 01</span>
+        <span>公开网页</span>
       </div>
 
       <section class="hero">
         <p class="eyebrow"><span></span> 不做信息流，只找你要的答案</p>
         <h1>在信息的缝隙里，<br /><em>寻到答案。</em></h1>
         <p class="hero__intro">
-          连接 DeepSeek 实时网页索引与正文抓取。搜索一次，按需读取；<br class="desktop-break" />
-          没有后台轮询，也不为无关结果买单。
+          搜索实时网页，找到真正相关的内容；需要细读时，再打开完整正文。<br class="desktop-break" />
+          只有成功获得结果时才会产生费用。
         </p>
 
         <form class="hero-search" @submit.prevent="submitSearch">
@@ -719,20 +719,20 @@ onBeforeUnmount(() => {
         <div class="feature-card feature-card--accent">
           <span class="feature-card__number">01</span>
           <Sparkles :size="20" />
-          <h2>搜索 + 抓取</h2>
-          <p>Search 找到实时网页，Fetch 再将单页转为 Markdown 正文；正文只在你点击时读取。</p>
+          <h2>先搜索，再细读</h2>
+          <p>先找到相关网页；需要完整内容时，再在当前页面里读取正文。</p>
         </div>
         <div class="feature-card">
           <span class="feature-card__number">02</span>
           <SlidersHorizontal :size="20" />
-          <h2>精确收束</h2>
-          <p>用语言、时间、站内范围控制搜索边界，让问题落在正确的信息场里。</p>
+          <h2>缩小范围</h2>
+          <p>按时间、语言和网站收窄结果，更快找到你真正需要的信息。</p>
         </div>
         <div class="feature-card">
           <span class="feature-card__number">03</span>
           <ShieldCheck :size="20" />
-          <h2>按需，计费</h2>
-          <p>搜索与抓取都只在提交时请求，成功产出结果才计费；会话内重复操作直接复用。</p>
+          <h2>花费清楚</h2>
+          <p>搜索和读取正文只在你主动操作时进行；成功获得结果才会计费。</p>
         </div>
       </section>
 
@@ -811,7 +811,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="filter-group">
-          <label for="mobile-site">限定站点</label>
+          <label for="mobile-site">指定网站</label>
           <input id="mobile-site" v-model="filters.site" placeholder="例如 github.com" />
         </div>
         <button class="apply-filter" type="button" @click="runSearch(query)">应用筛选</button>
@@ -820,7 +820,7 @@ onBeforeUnmount(() => {
       <div class="results-layout">
         <aside class="search-aside" :class="{ 'search-aside--open': filtersOpen }">
           <div class="aside-heading">
-            <h2>收束范围</h2>
+            <h2>筛选结果</h2>
             <button v-if="activeFilterCount" type="button" @click="resetFilters">
               <RotateCcw :size="13" /> 重置
             </button>
@@ -857,9 +857,8 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="filter-group">
-            <label for="site-filter"><Telescope :size="14" /> 站点范围</label>
+            <label for="site-filter"><Telescope :size="14" /> 指定网站</label>
             <div class="site-input">
-              <span>site:</span>
               <input
                 id="site-filter"
                 v-model="filters.site"
@@ -870,25 +869,25 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="filter-group">
-            <label for="count-filter">返回数量</label>
+            <label for="count-filter">显示结果数</label>
             <div class="range-row">
               <input id="count-filter" v-model.number="filters.count" type="range" min="5" max="20" step="5" />
               <output>{{ filters.count }}</output>
             </div>
-            <p class="filter-note">同一成功请求内，数量不增加费用。</p>
+            <p class="filter-note">每次搜索按次计费，与显示的结果数量无关。</p>
           </div>
 
           <label class="toggle-row">
             <span>
-              <strong>读取正文</strong>
-              <small>返回结果更完整</small>
+              <strong>同时读取正文</strong>
+              <small>适合需要完整内容时</small>
             </span>
             <input v-model="filters.needContent" type="checkbox" />
             <i></i>
           </label>
 
           <button class="aside-search" type="button" @click="runSearch(query)">
-            <SlidersHorizontal :size="15" /> 应用并重新搜索
+            <SlidersHorizontal :size="15" /> 应用筛选并搜索
           </button>
 
           <div v-if="history.length" class="aside-history">
@@ -909,13 +908,14 @@ onBeforeUnmount(() => {
             <div>
               <p class="results-heading__eyebrow">
                 <span class="live-dot"></span>
-                {{ status === 'loading' ? 'LIVE SEARCH' : isCached ? 'SESSION CACHE' : 'SEARCH COMPLETE' }}
+                {{ status === 'loading' ? '正在搜索' : isCached ? '已载入刚才的结果' : '搜索完成' }}
               </p>
               <h1>{{ resultHeading }}</h1>
             </div>
             <div class="results-toolbar">
               <span v-if="status === 'success' && results.length">
-                {{ isCached ? '已复用会话结果 · ' : `${elapsed.toFixed(2)}s · ` }}{{ activeFilterCount }} 项筛选
+                {{ isCached ? '已载入刚才的结果' : `用时 ${elapsed.toFixed(2)} 秒` }} ·
+                {{ activeFilterCount ? `${activeFilterCount} 项筛选` : '未添加筛选' }}
               </span>
               <div class="sort-control">
                 <ArrowDownUp :size="14" />
@@ -939,20 +939,20 @@ onBeforeUnmount(() => {
 
           <div v-else-if="status === 'error'" class="error-panel">
             <div class="error-panel__icon"><CircleAlert :size="28" /></div>
-            <p class="eyebrow"><span></span> REQUEST INTERRUPTED</p>
+            <p class="eyebrow"><span></span> 搜索遇到问题</p>
             <h2>线索在这里断了</h2>
             <p>{{ errorMessage }}</p>
             <div class="error-panel__actions">
               <button type="button" @click="runSearch(query)">再试一次</button>
               <button class="ghost" type="button" @click="openSettings">
-                <KeyRound :size="15" /> 检查 API Key
+                <KeyRound :size="15" /> 检查账户设置
               </button>
             </div>
           </div>
 
           <div v-else-if="status === 'success' && !results.length" class="empty-panel">
             <div class="empty-panel__rings"><span></span><span></span><Search :size="28" /></div>
-            <p class="eyebrow"><span></span> NO MATCHES</p>
+            <p class="eyebrow"><span></span> 没有匹配结果</p>
             <h2>换个问法，也许更近</h2>
             <p>试试减少筛选条件、使用更通用的关键词，或检查站点范围是否过窄。</p>
             <button type="button" @click="resetFilters">清除筛选条件</button>
@@ -996,13 +996,15 @@ onBeforeUnmount(() => {
                 <div class="result-card__foot">
                   <div class="result-tags">
                     <span>{{ formatResultDate(result.date) }}</span>
-                    <span :class="{ trusted: result.authority >= 3 }">
+                    <span v-if="authorityLabel(result.authority)" :class="{ trusted: result.authority >= 3 }">
                       <ShieldCheck :size="12" /> {{ authorityLabel(result.authority) }}
                     </span>
-                    <span v-if="result.rerank_score > 0">相关性 {{ scoreLabel(result.rerank_score) }}</span>
+                    <span v-if="relevanceLabel(result.rerank_score)">
+                      {{ relevanceLabel(result.rerank_score) }}
+                    </span>
                   </div>
                   <button type="button" @click="openResult(result)">
-                    摘要与正文 <ChevronLeft :size="13" />
+                    查看内容 <ChevronLeft :size="13" />
                   </button>
                 </div>
               </div>
@@ -1019,12 +1021,9 @@ onBeforeUnmount(() => {
     </main>
 
     <footer class="footer">
-      <p>寻迹 SIFT · 数据由 DeepSeek 网页搜索与抓取提供</p>
+      <p>寻迹 DSSE · 数据来自 DeepSeek 实时搜索</p>
       <div>
-        <button type="button" @click="guideOpen = true">搜索语法</button>
-        <a href="https://api-docs.deepseek.com/zh-cn/guides/search" target="_blank" rel="noreferrer">
-          API 文档 <ExternalLink :size="12" />
-        </a>
+        <button type="button" @click="guideOpen = true">搜索技巧</button>
       </div>
     </footer>
 
@@ -1039,13 +1038,14 @@ onBeforeUnmount(() => {
             <button class="modal__close" type="button" aria-label="关闭" @click="settingsOpen = false">
               <X :size="18" />
             </button>
-            <div class="modal__kicker"><KeyRound :size="15" /> CONNECTION</div>
+            <div class="modal__kicker"><KeyRound :size="15" /> 账户连接</div>
             <h2 id="settings-title">连接 DeepSeek</h2>
             <p class="modal__intro">
-              当前应用为纯前端模式。Key 仅保存在这台浏览器中，但会直接随请求发送到 DeepSeek。
+              填入 DeepSeek API Key 后即可开始搜索。Key 只用于访问 DeepSeek 的搜索与正文服务，
+              并保存在当前浏览器中。
             </p>
 
-            <label class="field-label" for="api-key">API Key</label>
+            <label class="field-label" for="api-key">DeepSeek API Key</label>
             <div class="key-input">
               <KeyRound :size="17" />
               <input
@@ -1057,22 +1057,22 @@ onBeforeUnmount(() => {
                 placeholder="sk-…"
                 @keydown.enter="saveKey"
               />
-              <span>{{ draftKey ? '已输入' : '为空' }}</span>
+              <span>{{ draftKey ? '已填写' : '未填写' }}</span>
             </div>
 
             <div class="notice">
               <ShieldCheck :size="18" />
               <p>
-                <strong>Key 只在运行时输入，不会写入构建产物。</strong>
-                纯前端仍无法对访问者隐藏密钥；正式产品建议增加自有后端代理。
+                <strong>请像保管密码一样保管 Key。</strong>
+                如果你使用公用设备，离开前可以清除这里的 Key。
               </p>
             </div>
 
             <div class="modal__actions">
               <button class="text-button" type="button" @click="clearLocalKey">
-                <Trash2 :size="14" /> 清除本地 Key
+                <Trash2 :size="14" /> 清除 Key
               </button>
-              <button class="primary-button" type="button" @click="saveKey">保存连接</button>
+              <button class="primary-button" type="button" @click="saveKey">保存设置</button>
             </div>
           </section>
         </div>
@@ -1084,9 +1084,9 @@ onBeforeUnmount(() => {
             <button class="modal__close" type="button" aria-label="关闭" @click="guideOpen = false">
               <X :size="18" />
             </button>
-            <div class="modal__kicker"><BookOpenText :size="15" /> SEARCH + FETCH</div>
-            <h2 id="guide-title">先找范围，再读正文</h2>
-            <p class="modal__intro">寻迹会把以下语法原样交给 DeepSeek 搜索服务，可与普通关键词组合使用。</p>
+            <div class="modal__kicker"><BookOpenText :size="15" /> 搜索技巧</div>
+            <h2 id="guide-title">让搜索更准确</h2>
+            <p class="modal__intro">在关键词后加入这些写法，可以更快把范围缩小到你关心的网站、语言和时间。</p>
             <div class="syntax-grid">
               <code>site:github.com</code><span>只在指定站点内搜索</span>
               <code>-site:example.com</code><span>排除指定站点</span>
@@ -1098,18 +1098,10 @@ onBeforeUnmount(() => {
             <div class="fetch-guide-note">
               <BookOpenText :size="18" />
               <p>
-                <strong>网页抓取由你决定。</strong>
-                打开结果后可手动抓取正文，不会自动请求；相同 URL 在当前会话内复用缓存。
+                <strong>完整正文按需读取。</strong>
+                只有你打开结果并选择读取正文时才会发生；同一条结果在一次浏览中只会读取一次。
               </p>
             </div>
-            <a
-              class="guide-link"
-              href="https://api-docs.deepseek.com/zh-cn/guides/search"
-              target="_blank"
-              rel="noreferrer"
-            >
-              阅读完整搜索语法 <ArrowUpRight :size="15" />
-            </a>
           </section>
         </div>
       </Transition>
@@ -1118,7 +1110,7 @@ onBeforeUnmount(() => {
         <div v-if="selectedResult" class="drawer-backdrop" @click.self="closeResult">
           <aside class="result-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
             <div class="drawer__head">
-              <span>RESULT / {{ domainOf(selectedResult.url) }}</span>
+              <span>网页详情 · {{ domainOf(selectedResult.url) }}</span>
               <button type="button" aria-label="关闭" @click="closeResult">
                 <X :size="18" />
               </button>
@@ -1131,15 +1123,19 @@ onBeforeUnmount(() => {
               <h2 id="drawer-title">{{ selectedResult.title || '未命名网页' }}</h2>
               <div class="drawer__meta">
                 <span>{{ formatResultDate(selectedResult.date) }}</span>
-                <span>{{ authorityLabel(selectedResult.authority) }}</span>
-                <span>相关性 {{ scoreLabel(selectedResult.rerank_score) }}</span>
+                <span v-if="authorityLabel(selectedResult.authority)">
+                  {{ authorityLabel(selectedResult.authority) }}
+                </span>
+                <span v-if="relevanceLabel(selectedResult.rerank_score)">
+                  {{ relevanceLabel(selectedResult.rerank_score) }}
+                </span>
               </div>
               <a class="drawer__url" :href="selectedResult.url" target="_blank" rel="noreferrer">
                 {{ selectedResult.url }} <ArrowUpRight :size="13" />
               </a>
               <div class="content-origin">
                 <span :title="fetchedTitle || selectedResult.title">{{ contentSource }}</span>
-                <span v-if="fetchedContent" class="content-origin__cached">SESSION CACHE</span>
+                <span v-if="fetchedContent" class="content-origin__cached">本次已读取</span>
               </div>
               <div class="markdown-body" v-html="renderedContent"></div>
               <div v-if="!hasFullContent" class="fetch-panel" :class="{ 'fetch-panel--error': fetchStatus === 'error' }">
@@ -1150,22 +1146,21 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="fetch-panel__copy">
                   <h3>
-                    {{ fetchStatus === 'loading' ? '正在抓取网页正文' : fetchStatus === 'error' ? '正文抓取失败' : '读取完整网页正文' }}
+                    {{ fetchStatus === 'loading' ? '正在读取正文' : fetchStatus === 'error' ? '没有读到这条正文' : '读取完整正文' }}
                   </h3>
                   <p v-if="fetchStatus === 'error'">{{ fetchError }}</p>
                   <p v-else>
-                    通过 DeepSeek Fetch 将页面转为 Markdown。仅在你点击后请求，成功获取正文时约
-                    ¥0.005 / 次。
+                    适合需要细看全文时使用。只有读取成功才会产生约 ¥0.005 的费用。
                   </p>
                 </div>
                 <button type="button" :disabled="fetchStatus === 'loading'" @click="fetchResultContent">
                   <LoaderCircle v-if="fetchStatus === 'loading'" class="spin" :size="14" />
                   <BookOpenText v-else :size="14" />
-                  {{ fetchStatus === 'loading' ? '抓取中' : fetchStatus === 'error' ? '重新抓取' : '抓取正文' }}
+                  {{ fetchStatus === 'loading' ? '读取中' : fetchStatus === 'error' ? '重新读取' : '读取全文' }}
                 </button>
               </div>
               <p v-else class="drawer__note">
-                已显示完整正文。关闭后再次打开同一 URL，会优先复用当前会话缓存，不重复抓取。
+                已显示完整正文。本次浏览期间再次打开这条结果，不会重复读取或收费。
               </p>
             </div>
             <div class="drawer__foot">

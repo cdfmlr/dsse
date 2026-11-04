@@ -1,4 +1,4 @@
-# 寻迹 SIFT
+# 寻迹 DSSE
 
 基于 Vue 3 + Vite 的纯前端 DeepSeek 网页搜索与抓取工具。
 

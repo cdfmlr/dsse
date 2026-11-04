@@ -818,12 +818,6 @@ select:focus-visible {
   gap: 3px;
 }
 
-.site-input span {
-  color: var(--ink-faint);
-  font-family: var(--mono);
-  font-size: 9px;
-}
-
 .site-input input {
   width: 100%;
   min-width: 0;
@@ -1729,16 +1723,6 @@ select:focus-visible {
   padding-left: 15px;
   color: var(--ink-soft);
   font-size: 10px;
-}
-
-.guide-link {
-  display: inline-flex;
-  align-items: center;
-  border-bottom: 1px solid var(--ink);
-  color: var(--ink);
-  font-size: 10px;
-  gap: 5px;
-  text-decoration: none;
 }
 
 .fetch-guide-note {
